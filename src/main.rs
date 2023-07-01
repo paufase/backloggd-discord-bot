@@ -1,3 +1,5 @@
+mod database;
+
 fn main() {
     let response =
         reqwest::blocking::get("https://www.backloggd.com/u/Winnie/activity/you/played,finished/")
