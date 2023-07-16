@@ -1,3 +1,7 @@
+mod domain;
+
+use sqlx::PgPool;
+
 struct Rating {
     id: i32,
     username: String,
@@ -11,7 +15,7 @@ struct RatingRepository {
 }
 
 impl RatingRepository {
-    fn new(db: Database) -> RatingRepository {
+    fn new(db: PgPool) -> RatingRepository {
         RatingRepository { db }
     }
 
