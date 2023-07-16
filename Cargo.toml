@@ -11,3 +11,5 @@ scraper = "0.16.0"
 sqlx = { version = "0.6", features = [  "runtime-async-std-native-tls", "postgres" ] }
 async-std = { version = "1", features = [ "attributes" ] }
 dotenv = "0.15.0"
+json = "0.12.4"
+serenity = "0.11.5"
