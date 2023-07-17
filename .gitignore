@@ -29,7 +29,7 @@ Cargo.lock
 *.pdb
 
 ### dotenv template
-src/.env
+.env
 *.env
 
 ### JetBrains template
