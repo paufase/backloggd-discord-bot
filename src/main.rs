@@ -9,7 +9,9 @@ use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
+use std::collections::hash_map::DefaultHasher;
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{env, fs};
@@ -25,7 +27,7 @@ impl EventHandler for Handler {
             println!("Checking logs...");
             for log in logs {
                 let cover = get_cover(log.game_url.as_str()).await;
-                let channel_id = ChannelId(815716163102179350);
+                let channel_id = ChannelId(1101160069736955915);
                 channel_id
                     .send_message(&context.http, |m| {
                         m.embed(|e| {
@@ -69,7 +71,7 @@ impl EventHandler for Handler {
                     .await
                     .expect("TODO: panic message");
             }
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_secs(3600)).await;
         }
     }
 }
@@ -77,7 +79,6 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-    // Configure the client with your Discord bot token in the environment.
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
@@ -168,7 +169,9 @@ async fn get_logs() -> Vec<Log> {
 async fn print_logs(username: &str) -> Vec<Log> {
     let mut logs = Vec::new();
     let response = reqwest::get(
-        "https://www.backloggd.com/u/".to_owned() + username + "/activity/you/played/",
+        "https://www.backloggd.com/u/".to_owned()
+            + username
+            + "/activity/you/played,finished,playing/",
     )
     .await
     .unwrap()
@@ -219,13 +222,16 @@ async fn print_logs(username: &str) -> Vec<Log> {
             "div.col.pl-1>div.stars-inline.star-ratings-static>div.stars-top",
         )
         .unwrap();
-        let element = log_element_html.select(&stars_selector).next().unwrap();
-        let style_text = element.value().attr("style").unwrap_or("");
-        let numeric_chars = style_text
-            .chars()
-            .filter(|c| c.is_numeric())
-            .collect::<String>();
-        let stars = numeric_chars.parse::<f64>().unwrap_or(0.0) * 5.0 / 100.0;
+        let mut stars = 0.0;
+        let element = log_element_html.select(&stars_selector).next();
+        if element.is_some() {
+            let style_text = element.unwrap().value().attr("style").unwrap_or("");
+            let numeric_chars = style_text
+                .chars()
+                .filter(|c| c.is_numeric())
+                .collect::<String>();
+            stars = numeric_chars.parse::<f64>().unwrap_or(0.0) * 5.0 / 100.0;
+        }
         let timestamp_selector =
             scraper::Selector::parse("div.col-auto>p.mb-0.time-tooltip").unwrap();
         let timestamp = string_to_html(
@@ -244,7 +250,7 @@ async fn print_logs(username: &str) -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        if status_log != Status::None {
+        if status_log != Status::None && has_not_passed_more_than_an_hour(&timestamp) {
             logs.push(get_log(
                 username.clone(),
                 decode_html_entities_to_string(game_name, &mut "".to_string()).to_string(),
@@ -256,7 +262,18 @@ async fn print_logs(username: &str) -> Vec<Log> {
             ));
         }
     }
+    logs.dedup_by_key(|log| {
+        let mut hasher = DefaultHasher::new();
+        (&log.game_name, &log.username).hash(&mut hasher);
+        hasher.finish()
+    });
     return logs;
+}
+
+fn has_not_passed_more_than_an_hour(timestamp: &str) -> bool {
+    let timestamp = get_timestamp(timestamp);
+    let now = Utc::now().timestamp();
+    return now - timestamp < 3600;
 }
 
 fn get_timestamp(timestamp_str: &str) -> i64 {
@@ -303,8 +320,8 @@ fn string_to_html(s: &str) -> Html {
 
 fn get_status_log(s: &str) -> Status {
     match s {
-        s if s.contains("is now playing") => Status::Playing,
-        s if s.contains("played") => Status::Played,
+        s if s.contains("now playing") => Status::Playing,
+        s if s.contains("played") || s.contains("finished") => Status::Played,
         s if s.contains("completed") => Status::Completed,
         s if s.contains("abandoned") => Status::Abandoned,
         s if s.contains("shelved") => Status::Shelved,
