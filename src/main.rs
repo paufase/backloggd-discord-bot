@@ -1,11 +1,16 @@
 use std::{env, fs};
+use std::fmt::Display;
 use scraper::Html;
+use chrono::{DateTime, Utc, TimeZone};
+
 
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 use dotenv::dotenv;
+use reqwest::header::{HeaderMap, HeaderValue};
+use serde::Deserialize;
 use serenity::utils::MessageBuilder;
 
 struct Handler;
@@ -14,29 +19,22 @@ struct Handler;
 impl EventHandler for Handler {
     async fn message(&self, context: Context, msg: Message) {
         if msg.content == "!backloggd" {
-            let channel = match msg.channel_id.to_channel(&context).await {
-                Ok(channel) => channel,
-                Err(why) => {
-                    println!("Error getting channel: {:?}", why);
-
-                    return;
-                },
-            };
             let logs = check_feeds().await;
             for log in logs {
+                let cover = get_cover(log.game_url.as_str()).await;
                 msg.channel_id.send_message(&context.http, |m| {
                     m.embed(|e| e
                         .colour(0xbcdefa)
                         .title(MessageBuilder::new()
-                            .push(log.game_name)
-                            .push(" ")
-                            .push(getStarsText(log.rating))
+                            .push(log.game_name.to_string() + " " + &*get_stars_text(log.rating))
                             .build())
-                        .field(log.username.clone() + " " + &*localize_status(&log.status), "", false)
-                        .image("https://www.backloggd.com/packs/media/images/meta_banner-d63b2a0bc9b9184fa61ddf135435c219.jpg")
-                        .footer(|f| {
-                            f.text("🕒 Stats last updated @");
-                            f
+                        .url("https://www.backloggd.com".to_owned() + &*log.game_url)
+                        .field(localize_status(&log.status).to_string() + " <t:".to_string().as_str() + get_timestamp(log.timestamp.as_str()).to_string().as_str() + ":R>", "", false)
+                        .thumbnail("https://images.igdb.com/igdb/image/upload/t_cover_big/".to_owned() + cover.trim() + ".png")
+                        .author(|a| {
+                            a.name(log.username.clone())
+                                .url("https://www.backloggd.com/u/".to_owned() + &*log.username)
+                                .icon_url(log.avatar_url)
                         })
                     )
                 }).await.expect("TODO: panic message");
@@ -63,6 +61,66 @@ async fn main() {
     if let Err(why) = client.start().await {
         println!("Client error: {:?}", why);
     }
+}
+
+async fn get_cover(game_name: &str) -> String {
+    let access_token = env::var("TWITCH_ACCESS_TOKEN").unwrap();
+    let client_id = env::var("TWITCH_CLIENT_ID").unwrap();
+    let games_api_url = "https://api.igdb.com/v4/games/";
+    let cover_api_url = "https://api.igdb.com/v4/covers/";
+
+    let client = reqwest::Client::new();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {}", access_token)).unwrap(),
+    );
+    headers.insert(
+        "Client-ID",
+        HeaderValue::from_str(&client_id).unwrap(),
+    );
+
+    let game_response = client
+        .post(games_api_url)
+        .headers(headers.clone())
+        .body("fields cover; where url = \"https://www.igdb.com".to_owned() + &game_name[..game_name.len() - 1] + "\";")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let game_id = serde_json::from_str::<Vec<Game>>(&game_response)
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .id;
+    let cover_response = client
+        .post(cover_api_url)
+        .headers(headers)
+        .body("fields image_id; where game =".to_owned() + game_id.to_string().as_str() + ";" )
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let image_id = serde_json::from_str::<Vec<Cover>>(&cover_response)
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .image_id.to_string();
+    image_id
+}
+
+#[derive(Debug, Deserialize)]
+struct Game {
+    id: i32,
+}
+
+#[derive(Debug, Deserialize)]
+struct Cover {
+    image_id: String,
 }
 
 async fn check_feeds() -> Vec<Log> {
@@ -96,6 +154,9 @@ async fn print_logs(username: &str) -> Vec<Log> {
         .unwrap()
         .trim()
         .to_string();
+    let avatar = scraper::Selector::parse("div.avatar.avatar-static>img").unwrap();
+    let avatar_element = document.select(&avatar).next().unwrap();
+    let avatar_url = avatar_element.value().attr("src").unwrap().trim().to_string();
     let logs_elements = document
         .select(&log_selector)
         .map(|x| x.inner_html())
@@ -103,6 +164,12 @@ async fn print_logs(username: &str) -> Vec<Log> {
     for log_element in logs_elements {
         let mut log_element_html = string_to_html(&log_element);
         let game_selector = scraper::Selector::parse("div.col.pl-1>a").unwrap();
+        let a_element = log_element_html
+        .select(&game_selector)
+        .skip(1)
+        .next()
+        .unwrap();
+        let game_url = a_element.value().attr("href").unwrap().trim().to_string();
         let game_name = log_element_html
             .select(&game_selector)
             .skip(1)
@@ -117,14 +184,22 @@ async fn print_logs(username: &str) -> Vec<Log> {
         let style_text = element.value().attr("style").unwrap_or("");
         let numeric_chars = style_text.chars().filter(|c| c.is_numeric()).collect::<String>();
         let stars = numeric_chars.parse::<f64>().unwrap_or(0.0) * 5.0 / 100.0;
+        let timestamp_selector = scraper::Selector::parse("div.col-auto>p.mb-0.time-tooltip").unwrap();
+        let timestamp = string_to_html(log_element_html.select(&timestamp_selector).next().unwrap().value().attr("data-tippy-content").unwrap())
+            .select(&scraper::Selector::parse("time").unwrap()).next().unwrap().value().attr("datetime").unwrap().to_string();
         if status_log != Status::None {
-            logs.push(get_log(username.clone(), game_name, stars, status_log));
+            logs.push(get_log(username.clone(), game_name, stars, status_log, game_url, avatar_url.clone(), timestamp));
         }
     }
     return logs;
 }
 
-fn getStarsText(s: f64) -> String {
+fn get_timestamp(timestamp_str: &str) -> i64 {
+    let datetime: DateTime<Utc> = Utc.datetime_from_str(timestamp_str, "%Y-%m-%dT%H:%M:%SZ").unwrap();
+    datetime.timestamp()
+}
+
+fn get_stars_text(s: f64) -> String {
     let mut stars = String::new();
     for _ in 0..s as i32 {
         stars.push('★');
@@ -140,12 +215,18 @@ fn get_log(
     game_name: String,
     rating: f64,
     status: Status,
+    game_url: String,
+    avatar_url: String,
+    timestamp: String,
 ) -> Log {
     Log {
         username,
         game_name,
         rating,
         status,
+        game_url,
+        avatar_url,
+        timestamp,
     }
 }
 
@@ -167,13 +248,13 @@ fn get_status_log(s: &str) -> Status {
 
 fn localize_status(status: &Status) -> String {
     match status {
-        Status::Playing => "está jugando a".to_string(),
-        Status::Played => "ha jugado a".to_string(),
-        Status::Completed => "ha completado".to_string(),
-        Status::Abandoned => "ha abandonado".to_string(),
-        Status::Shelved => "ha dejado en la estantería".to_string(),
-        Status::Retired => "ha retirado".to_string(),
-        Status::None => "no ha hecho nada con".to_string(),
+        Status::Playing => "Jugando".to_string(),
+        Status::Played => "Terminado".to_string(),
+        Status::Completed => "Completado".to_string(),
+        Status::Abandoned => "Abandonado".to_string(),
+        Status::Shelved => "Dejado en la estantería".to_string(),
+        Status::Retired => "Retirado".to_string(),
+        Status::None => "No sé que ha hecho".to_string(),
     }
 }
 
@@ -193,4 +274,7 @@ struct Log {
     game_name: String,
     rating: f64,
     status: Status,
+    game_url: String,
+    avatar_url: String,
+    timestamp: String,
 }
