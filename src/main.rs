@@ -10,9 +10,7 @@ use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use std::collections::hash_map::DefaultHasher;
-use std::fmt::Display;
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::time::Duration;
 use std::{env, fs};
 
@@ -43,7 +41,7 @@ impl EventHandler for Handler {
                                 )
                                 .url("https://www.backloggd.com".to_owned() + &*log.game_url)
                                 .field(
-                                    localize_status(&log.status).to_string()
+                                    localize_status(&log.status)
                                         + " <t:".to_string().as_str()
                                         + get_timestamp(log.timestamp.as_str())
                                             .to_string()
@@ -157,13 +155,13 @@ struct Cover {
 async fn get_logs() -> Vec<Log> {
     let mut logs = Vec::new();
     let binding = fs::read_to_string("src/users.txt").unwrap();
-    let usernames = binding.split("\n").collect::<Vec<&str>>();
+    let usernames = binding.split('\n').collect::<Vec<&str>>();
     for username in usernames {
-        for log in print_logs(&username).await {
+        for log in print_logs(username).await {
             logs.push(log);
         }
     }
-    return logs;
+    logs
 }
 
 async fn print_logs(username: &str) -> Vec<Log> {
@@ -201,18 +199,13 @@ async fn print_logs(username: &str) -> Vec<Log> {
         .map(|x| x.inner_html())
         .collect::<Vec<String>>();
     for log_element in logs_elements {
-        let mut log_element_html = string_to_html(&log_element);
+        let log_element_html = string_to_html(&log_element);
         let game_selector = scraper::Selector::parse("div.col.pl-1>a").unwrap();
-        let a_element = log_element_html
-            .select(&game_selector)
-            .skip(1)
-            .next()
-            .unwrap();
+        let a_element = log_element_html.select(&game_selector).nth(1).unwrap();
         let game_url = a_element.value().attr("href").unwrap().trim().to_string();
         let game_name = log_element_html
             .select(&game_selector)
-            .skip(1)
-            .next()
+            .nth(1)
             .unwrap()
             .inner_html()
             .trim()
@@ -250,7 +243,9 @@ async fn print_logs(username: &str) -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        if status_log != Status::None && has_not_passed_more_than_an_hour(&timestamp) {
+        if (status_log == Status::Completed || status_log == Status::Played)
+            && has_not_passed_more_than_an_hour(&timestamp)
+        {
             logs.push(get_log(
                 username.clone(),
                 decode_html_entities_to_string(game_name, &mut "".to_string()).to_string(),
@@ -267,13 +262,13 @@ async fn print_logs(username: &str) -> Vec<Log> {
         (&log.game_name, &log.username).hash(&mut hasher);
         hasher.finish()
     });
-    return logs;
+    logs
 }
 
 fn has_not_passed_more_than_an_hour(timestamp: &str) -> bool {
     let timestamp = get_timestamp(timestamp);
     let now = Utc::now().timestamp();
-    return now - timestamp < 3600;
+    now - timestamp < 3600
 }
 
 fn get_timestamp(timestamp_str: &str) -> i64 {
@@ -291,7 +286,7 @@ fn get_stars_text(s: f64) -> String {
     if s.fract() > 0.0 {
         stars.push('½');
     }
-    return stars;
+    stars
 }
 
 fn get_log(
@@ -315,7 +310,7 @@ fn get_log(
 }
 
 fn string_to_html(s: &str) -> Html {
-    Html::parse_fragment(&s)
+    Html::parse_fragment(s)
 }
 
 fn get_status_log(s: &str) -> Status {
