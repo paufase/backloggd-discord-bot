@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use dotenv::dotenv;
 use html_escape::decode_html_entities_to_string;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -10,9 +10,9 @@ use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use std::collections::hash_map::DefaultHasher;
+use std::env;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
-use std::{env, fs};
 
 struct Handler;
 
@@ -21,10 +21,11 @@ impl EventHandler for Handler {
     async fn ready(&self, context: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
         loop {
+            println!("Checking logs at {}", Local::now());
             let logs = get_logs().await;
-            println!("Checking logs...");
             for log in logs {
                 let cover = get_cover(log.game_url.as_str()).await;
+                let avatar_url = get_avatar_url(&log.username).await;
                 let channel_id = ChannelId(1101160069736955915);
                 channel_id
                     .send_message(&context.http, |m| {
@@ -62,14 +63,14 @@ impl EventHandler for Handler {
                                             "https://www.backloggd.com/u/".to_owned()
                                                 + &*log.username,
                                         )
-                                        .icon_url(log.avatar_url)
+                                        .icon_url(avatar_url)
                                 })
                         })
                     })
                     .await
                     .expect("TODO: panic message");
             }
-            tokio::time::sleep(Duration::from_secs(3600)).await;
+            tokio::time::sleep(Duration::from_secs(1800)).await;
         }
     }
 }
@@ -154,22 +155,8 @@ struct Cover {
 
 async fn get_logs() -> Vec<Log> {
     let mut logs = Vec::new();
-    let binding = fs::read_to_string("src/users.txt").unwrap();
-    let usernames = binding.split('\n').collect::<Vec<&str>>();
-    for username in usernames {
-        for log in print_logs(username).await {
-            logs.push(log);
-        }
-    }
-    logs
-}
-
-async fn print_logs(username: &str) -> Vec<Log> {
-    let mut logs = Vec::new();
     let response = reqwest::get(
-        "https://www.backloggd.com/u/".to_owned()
-            + username
-            + "/activity/you/played,finished,playing/",
+        "https://www.backloggd.com/u/spanishtoboggan/activity/friends/played,finished/",
     )
     .await
     .unwrap()
@@ -178,22 +165,6 @@ async fn print_logs(username: &str) -> Vec<Log> {
     .unwrap();
     let document = Html::parse_document(&response);
     let log_selector = scraper::Selector::parse("div.row.activity").unwrap();
-    let username_selector = scraper::Selector::parse("h3.mr-2.mb-0.main-header").unwrap();
-    let username = document
-        .select(&username_selector)
-        .map(|x| x.inner_html())
-        .next()
-        .unwrap()
-        .trim()
-        .to_string();
-    let avatar = scraper::Selector::parse("div.avatar.avatar-static>img").unwrap();
-    let avatar_element = document.select(&avatar).next().unwrap();
-    let avatar_url = avatar_element
-        .value()
-        .attr("src")
-        .unwrap()
-        .trim()
-        .to_string();
     let logs_elements = document
         .select(&log_selector)
         .map(|x| x.inner_html())
@@ -206,6 +177,13 @@ async fn print_logs(username: &str) -> Vec<Log> {
         let game_name = log_element_html
             .select(&game_selector)
             .nth(1)
+            .unwrap()
+            .inner_html()
+            .trim()
+            .to_string();
+        let username = log_element_html
+            .select(&game_selector)
+            .next()
             .unwrap()
             .inner_html()
             .trim()
@@ -252,7 +230,6 @@ async fn print_logs(username: &str) -> Vec<Log> {
                 stars,
                 status_log,
                 game_url,
-                avatar_url.clone(),
                 timestamp,
             ));
         }
@@ -265,10 +242,28 @@ async fn print_logs(username: &str) -> Vec<Log> {
     logs
 }
 
+async fn get_avatar_url(username: &str) -> String {
+    let response = reqwest::get("https://www.backloggd.com/u/".to_string() + username)
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let document = Html::parse_document(&response);
+    let avatar = scraper::Selector::parse("div.avatar.avatar-static>img").unwrap();
+    let avatar_element = document.select(&avatar).next().unwrap();
+    avatar_element
+        .value()
+        .attr("src")
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
 fn has_not_passed_more_than_an_hour(timestamp: &str) -> bool {
     let timestamp = get_timestamp(timestamp);
     let now = Utc::now().timestamp();
-    now - timestamp < 3600
+    now - timestamp < 1800
 }
 
 fn get_timestamp(timestamp_str: &str) -> i64 {
@@ -295,7 +290,6 @@ fn get_log(
     rating: f64,
     status: Status,
     game_url: String,
-    avatar_url: String,
     timestamp: String,
 ) -> Log {
     Log {
@@ -304,7 +298,6 @@ fn get_log(
         rating,
         status,
         game_url,
-        avatar_url,
         timestamp,
     }
 }
@@ -354,6 +347,5 @@ struct Log {
     rating: f64,
     status: Status,
     game_url: String,
-    avatar_url: String,
     timestamp: String,
 }
