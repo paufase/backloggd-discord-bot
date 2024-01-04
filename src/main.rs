@@ -1,9 +1,13 @@
+use chrono::NaiveDate;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use dotenv::dotenv;
 use html_escape::decode_html_entities_to_string;
 use reqwest::header::{HeaderMap, HeaderValue};
 use scraper::Html;
 use serde::Deserialize;
+use serenity::all::CreateEmbed;
+use serenity::all::CreateEmbedAuthor;
+use serenity::all::CreateMessage;
 use serenity::async_trait;
 use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
@@ -11,7 +15,10 @@ use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use std::collections::hash_map::DefaultHasher;
 use std::env;
+use std::fs;
 use std::hash::{Hash, Hasher};
+use std::io::BufWriter;
+use std::io::Write;
 use std::time::Duration;
 
 struct Handler;
@@ -23,65 +30,68 @@ impl EventHandler for Handler {
         loop {
             println!("Checking logs at {}", Local::now());
             let logs = get_logs().await;
+            if !logs.is_empty() {
+                refresh_twitch_token().await;
+            }
             for log in logs {
                 let cover = get_cover(log.game_url.as_str()).await;
                 let avatar_url = get_avatar_url(&log.username).await;
-                let channel_id = ChannelId(1101160069736955915);
+                let channel_id = ChannelId::new(1101160069736955915);
                 channel_id
-                    .send_message(&context.http, |m| {
-                        m.embed(|e| {
-                            e.colour(0xbcdefa)
-                                .title(
-                                    MessageBuilder::new()
-                                        .push(
-                                            log.game_name.to_string()
-                                                + " "
-                                                + &*get_stars_text(log.rating),
-                                        )
-                                        .build(),
-                                )
-                                .url("https://www.backloggd.com".to_owned() + &*log.game_url)
-                                .field(
-                                    localize_status(&log.status)
-                                        + " <t:".to_string().as_str()
-                                        + get_timestamp(log.timestamp.as_str())
-                                            .to_string()
-                                            .as_str()
-                                        + ":R>",
-                                    "",
-                                    false,
-                                )
-                                .thumbnail(
-                                    "https://images.igdb.com/igdb/image/upload/t_cover_big/"
-                                        .to_owned()
-                                        + cover.trim()
-                                        + ".png",
-                                )
-                                .author(|a| {
-                                    a.name(log.username.clone())
-                                        .url(
-                                            "https://www.backloggd.com/u/".to_owned()
-                                                + &*log.username,
-                                        )
-                                        .icon_url(avatar_url)
-                                })
-                        })
-                    })
+                    .send_message(
+                        &context.http,
+                        CreateMessage::new().embed(create_embed(log, avatar_url, cover)),
+                    )
                     .await
                     .expect("TODO: panic message");
             }
-            tokio::time::sleep(Duration::from_secs(1800)).await;
+            tokio::time::sleep(Duration::from_secs(env::var("SECONDS_UNTIL_NEXT_CHECK").expect("Environment variable SECONDS_UNTIL_NEXT_CHECK is missing").parse::<u64>().expect("SECONDS_UNTIL_NEXT_CHECK is not a number"))).await;
         }
     }
+}
+
+fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEmbed {
+    println!("{} logged by {}", log.game_name.clone(), log.username.clone());
+    let embed = CreateEmbed::new()
+        .colour(0xbcdefa)
+        .title(
+            MessageBuilder::new()
+                .push(log.game_name.to_string() + " " + &*get_stars_text(log.rating))
+                .build(),
+        )
+        .url("https://www.backloggd.com".to_owned() + &*log.game_url)
+        .field(
+            localize_status(&log.status)
+                + " <t:".to_string().as_str()
+                + get_timestamp(log.timestamp.as_str()).to_string().as_str()
+                + ":R>",
+            "",
+            false,
+        )
+        .author({
+            let author = CreateEmbedAuthor::new(log.username.clone())
+                .url("https://www.backloggd.com/u/".to_owned() + &*log.username)
+                .icon_url(avatar_url);
+            author
+        });
+    if let Some(cover) = cover {
+        return embed.clone().thumbnail(
+            "https://images.igdb.com/igdb/image/upload/t_cover_big/".to_owned()
+                + cover.trim()
+                + ".png",
+        );
+    }
+    return embed;
 }
 
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+    refresh_twitch_token().await;
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
-    let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
+    let token = env::var("DISCORD_TOKEN").expect("Expected a discord token in the environment");
     let mut client = Client::builder(token, intents)
         .event_handler(Handler)
         .await
@@ -91,9 +101,65 @@ async fn main() {
     }
 }
 
-async fn get_cover(game_name: &str) -> String {
-    let access_token = env::var("TWITCH_ACCESS_TOKEN").unwrap();
-    let client_id = env::var("TWITCH_CLIENT_ID").unwrap();
+async fn refresh_twitch_token() {
+    let client_id =
+        env::var("TWITCH_CLIENT_ID").expect("Expected a twitch client id in the environment");
+    let client_secret = env::var("TWITCH_CLIENT_SECRET")
+        .expect("Expected a twitch client secret in the environment");
+    let token_generation_date = env::var("TWITCH_TOKEN_GENERATION_DATE").map_or_else(
+        |_| NaiveDate::from_ymd_opt(1997, 12, 28).unwrap(),
+        |date_string| {
+            NaiveDate::parse_from_str(date_string.as_str(), "%Y-%m-%d")
+                .unwrap_or_else(|_| Utc::now().naive_utc().date())
+        },
+    );
+    if (Utc::now().naive_utc().date() - token_generation_date).num_days() < 30 ||  token_generation_date > Utc::now().naive_utc().date() {
+        return;
+    }
+    let client = reqwest::Client::new();
+    let response = client
+        .post("https://id.twitch.tv/oauth2/token")
+        .body(
+            "client_id=".to_owned()
+                + &client_id
+                + "&client_secret="
+                + &client_secret
+                + "&grant_type=client_credentials",
+        )
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let response = serde_json::from_str::<serde_json::Value>(&response).unwrap();
+    let access_token = response.get("access_token").unwrap().as_str().unwrap();
+    let file_content = fs::read_to_string(".env").unwrap();
+    let mut lines: Vec<String> = file_content.lines().map(String::from).collect();
+
+    for line in &mut lines {
+        if line.starts_with("TWITCH_ACCESS_TOKEN=") {
+            *line = format!("TWITCH_ACCESS_TOKEN={}", access_token);
+        } else if line.starts_with("TWITCH_TOKEN_GENERATION_DATE=") {
+            *line = format!(
+                "TWITCH_TOKEN_GENERATION_DATE={}",
+                Utc::now().naive_utc().date()
+            );
+        }
+    }
+
+    let file = fs::File::create(".env").unwrap();
+    let mut writer = BufWriter::new(file);
+    for line in &lines {
+        writeln!(writer, "{}", line).unwrap();
+    }
+}
+
+async fn get_cover(game_name: &str) -> Option<String> {
+    let access_token =
+        env::var("TWITCH_ACCESS_TOKEN").expect("Expected a twitch access token in the environment");
+    let client_id =
+        env::var("TWITCH_CLIENT_ID").expect("Expected a twitch client id in the environment");
     let games_api_url = "https://api.igdb.com/v4/games/";
     let cover_api_url = "https://api.igdb.com/v4/covers/";
 
@@ -134,13 +200,12 @@ async fn get_cover(game_name: &str) -> String {
         .text()
         .await
         .unwrap();
-    let image_id = serde_json::from_str::<Vec<Cover>>(&cover_response)
-        .unwrap()
-        .get(0)
-        .unwrap()
-        .image_id
-        .to_string();
-    image_id
+    let maybe_image_id = serde_json::from_str::<Vec<Cover>>(&cover_response);
+    if maybe_image_id.as_ref().unwrap().get(0).is_none() {
+        return None;
+    }
+    let image_id = maybe_image_id.unwrap().get(0).unwrap().image_id.to_string();
+    Some(image_id)
 }
 
 #[derive(Debug, Deserialize)]
