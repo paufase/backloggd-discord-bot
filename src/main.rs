@@ -36,7 +36,7 @@ impl EventHandler for Handler {
             for log in logs {
                 let cover = get_cover(log.game_url.as_str()).await;
                 let avatar_url = get_avatar_url(&log.username).await;
-                let channel_id = ChannelId::new(1101160069736955915);
+                let channel_id = ChannelId::new(env::var("DISCORD_CHANNEL_ID").expect("Expected a discord channel id in the environment").parse().unwrap());
                 channel_id
                     .send_message(
                         &context.http,
@@ -45,7 +45,11 @@ impl EventHandler for Handler {
                     .await
                     .expect("TODO: panic message");
             }
-            tokio::time::sleep(Duration::from_secs(env::var("SECONDS_UNTIL_NEXT_CHECK").expect("Environment variable SECONDS_UNTIL_NEXT_CHECK is missing").parse::<u64>().expect("SECONDS_UNTIL_NEXT_CHECK is not a number"))).await;
+            tokio::time::sleep(
+                Duration::from_secs(env::var("SECONDS_UNTIL_NEXT_CHECK")
+                    .expect("Environment variable SECONDS_UNTIL_NEXT_CHECK is missing")
+                    .parse::<u64>()
+                    .expect("SECONDS_UNTIL_NEXT_CHECK is not a number"))).await;
         }
     }
 }
@@ -286,7 +290,7 @@ async fn get_logs() -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        if (status_log == Status::Completed || status_log == Status::Played)
+        if (status_log != Status::Completed)
             && has_not_passed_more_than_an_hour(&timestamp)
         {
             logs.push(get_log(
