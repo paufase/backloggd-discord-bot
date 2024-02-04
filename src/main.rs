@@ -84,7 +84,7 @@ fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEm
                 MessageBuilder::new()
                     .push(review.review_text)
                     .push("\n")
-                    .push("[See review on Backloggd](https://www.backloggd.com".to_owned() + &*review.review_url + ")")
+                    .push("[Ver review en Backloggd](https://www.backloggd.com".to_owned() + &*review.review_url + ")")
                     .build(),
             );
     }
@@ -328,14 +328,37 @@ fn get_review_text(log_element_html: &Html) -> Option<Review> {
     if review_card.is_none() {
         return None;
     }
+    let is_spoiler_selector = scraper::Selector::parse("div.spoiler-warning").unwrap();
+    let is_spoiler = review_card.unwrap().select(&is_spoiler_selector).next();
+    let is_spoiler = is_spoiler.is_some();
     let review_body_selector = scraper::Selector::parse("div.card-text").unwrap();
     let review_body = review_card.unwrap().select(&review_body_selector).next();
     let review_url_selector = scraper::Selector::parse("a.small-link").unwrap();
     let review_link = review_card.unwrap().select(&review_url_selector).next();
     if review_body.is_some() {
+        let review_text = review_body.unwrap().inner_html().to_string().replace("<br>", "\n");
+        let limit = 500;
+        if review_text.len() < limit {
+            return Some(Review {
+                review_url: review_link.unwrap().value().attr("href").unwrap().to_string(),
+                review_text: if is_spoiler { format!("||{}||", review_text) } else { review_text },
+            });
+        }
+        let mut limited_text = String::new();
+        for word in review_text.split_whitespace() {
+            if limited_text.len() + word.len() > limit {
+                break;
+            }
+            limited_text.push_str(word);
+            limited_text.push(' ');
+        }
+        if limited_text.len() < review_text.len() {
+            limited_text = limited_text.trim().to_string();
+            limited_text.push_str("...");
+        }
         return Some(Review {
             review_url: review_link.unwrap().value().attr("href").unwrap().to_string(),
-            review_text: review_body.unwrap().inner_html().to_string().replace("<br>", "\n"),
+            review_text : limited_text,
         });
     }
     None
