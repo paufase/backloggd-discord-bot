@@ -56,7 +56,7 @@ impl EventHandler for Handler {
 
 fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEmbed {
     println!("{} logged by {}", log.game_name.clone(), log.username.clone());
-    let embed = CreateEmbed::new()
+    let mut embed = CreateEmbed::new()
         .colour(0xbcdefa)
         .title(
             MessageBuilder::new()
@@ -78,8 +78,18 @@ fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEm
                 .icon_url(avatar_url);
             author
         });
+    if let Some(review) = log.review {
+        embed = embed
+            .description(
+                MessageBuilder::new()
+                    .push(review.review_text)
+                    .push("\n")
+                    .push("[See review on Backloggd](https://www.backloggd.com".to_owned() + &*review.review_url + ")")
+                    .build(),
+            );
+    }
     if let Some(cover) = cover {
-        return embed.clone().thumbnail(
+        embed = embed.thumbnail(
             "https://images.igdb.com/igdb/image/upload/t_cover_big/".to_owned()
                 + cover.trim()
                 + ".png",
@@ -290,8 +300,8 @@ async fn get_logs() -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        if (status_log != Status::Completed)
-            && has_not_passed_more_than_an_hour(&timestamp)
+        let review_text= get_review_text(&log_element_html);
+        if has_not_passed_more_than_half_an_hour(&timestamp)
         {
             logs.push(get_log(
                 username.clone(),
@@ -300,6 +310,7 @@ async fn get_logs() -> Vec<Log> {
                 status_log,
                 game_url,
                 timestamp,
+                review_text
             ));
         }
     }
@@ -309,6 +320,25 @@ async fn get_logs() -> Vec<Log> {
         hasher.finish()
     });
     logs
+}
+
+fn get_review_text(log_element_html: &Html) -> Option<Review> {
+    let review_card_selector = scraper::Selector::parse("div.review-card").unwrap();
+    let review_card = log_element_html.select(&review_card_selector).next();
+    if review_card.is_none() {
+        return None;
+    }
+    let review_body_selector = scraper::Selector::parse("div.card-text").unwrap();
+    let review_body = review_card.unwrap().select(&review_body_selector).next();
+    let review_url_selector = scraper::Selector::parse("a.small-link").unwrap();
+    let review_link = review_card.unwrap().select(&review_url_selector).next();
+    if review_body.is_some() {
+        return Some(Review {
+            review_url: review_link.unwrap().value().attr("href").unwrap().to_string(),
+            review_text: review_body.unwrap().inner_html().to_string().replace("<br>", "\n"),
+        });
+    }
+    None
 }
 
 async fn get_avatar_url(username: &str) -> String {
@@ -329,7 +359,7 @@ async fn get_avatar_url(username: &str) -> String {
         .to_string()
 }
 
-fn has_not_passed_more_than_an_hour(timestamp: &str) -> bool {
+fn has_not_passed_more_than_half_an_hour(timestamp: &str) -> bool {
     let timestamp = get_timestamp(timestamp);
     let now = Utc::now().timestamp();
     now - timestamp < 1800
@@ -360,6 +390,7 @@ fn get_log(
     status: Status,
     game_url: String,
     timestamp: String,
+    review: Option<Review>,
 ) -> Log {
     Log {
         username,
@@ -368,6 +399,7 @@ fn get_log(
         status,
         game_url,
         timestamp,
+        review,
     }
 }
 
@@ -393,7 +425,7 @@ fn localize_status(status: &Status) -> String {
         Status::Played => "Terminado".to_string(),
         Status::Completed => "Completado".to_string(),
         Status::Abandoned => "Abandonado".to_string(),
-        Status::Shelved => "Dejado en la estantería".to_string(),
+        Status::Shelved => "Aparcado".to_string(),
         Status::Retired => "Retirado".to_string(),
         Status::None => "No sé que ha hecho".to_string(),
     }
@@ -417,4 +449,10 @@ struct Log {
     status: Status,
     game_url: String,
     timestamp: String,
+    review: Option<Review>,
+}
+
+struct Review {
+    review_url: String,
+    review_text: String,
 }
