@@ -433,7 +433,8 @@ fn string_to_html(s: &str) -> Html {
 fn get_status_log(s: &str) -> Status {
     match s {
         s if s.contains("now playing") => Status::Playing,
-        s if s.contains("played") || s.contains("finished") => Status::Played,
+        s if s.contains("played") => Status::Played,
+        s if s.contains("finished") => Status::Finished,
         s if s.contains("completed") => Status::Completed,
         s if s.contains("abandoned") => Status::Abandoned,
         s if s.contains("shelved") => Status::Shelved,
@@ -445,7 +446,8 @@ fn get_status_log(s: &str) -> Status {
 fn localize_status(status: &Status) -> String {
     match status {
         Status::Playing => "Jugando".to_string(),
-        Status::Played => "Terminado".to_string(),
+        Status::Played => "Jugado".to_string(),
+        Status::Finished => "Terminado".to_string(),
         Status::Completed => "Completado".to_string(),
         Status::Abandoned => "Abandonado".to_string(),
         Status::Shelved => "Aparcado".to_string(),
@@ -458,6 +460,7 @@ fn localize_status(status: &Status) -> String {
 enum Status {
     Playing,
     Played,
+    Finished,
     Completed,
     Abandoned,
     Shelved,
