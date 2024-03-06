@@ -15,10 +15,9 @@ use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
 use std::collections::hash_map::DefaultHasher;
 use std::env;
-use std::fs;
+use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::io::BufWriter;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::time::Duration;
 
 struct Handler;
@@ -36,7 +35,12 @@ impl EventHandler for Handler {
             for log in logs {
                 let cover = get_cover(log.game_url.as_str()).await;
                 let avatar_url = get_avatar_url(&log.username).await;
-                let channel_id = ChannelId::new(env::var("DISCORD_CHANNEL_ID").expect("Expected a discord channel id in the environment").parse().unwrap());
+                let channel_id = ChannelId::new(
+                    env::var("DISCORD_CHANNEL_ID")
+                        .expect("Expected a discord channel id in the environment")
+                        .parse()
+                        .unwrap(),
+                );
                 channel_id
                     .send_message(
                         &context.http,
@@ -45,17 +49,23 @@ impl EventHandler for Handler {
                     .await
                     .expect("TODO: panic message");
             }
-            tokio::time::sleep(
-                Duration::from_secs(env::var("SECONDS_UNTIL_NEXT_CHECK")
+            tokio::time::sleep(Duration::from_secs(
+                env::var("SECONDS_UNTIL_NEXT_CHECK")
                     .expect("Environment variable SECONDS_UNTIL_NEXT_CHECK is missing")
                     .parse::<u64>()
-                    .expect("SECONDS_UNTIL_NEXT_CHECK is not a number"))).await;
+                    .expect("SECONDS_UNTIL_NEXT_CHECK is not a number"),
+            ))
+            .await;
         }
     }
 }
 
 fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEmbed {
-    println!("{} logged by {}", log.game_name.clone(), log.username.clone());
+    println!(
+        "{} logged by {}",
+        log.game_name.clone(),
+        log.username.clone()
+    );
     let mut embed = CreateEmbed::new()
         .colour(0xbcdefa)
         .title(
@@ -79,14 +89,18 @@ fn create_embed(log: Log, avatar_url: String, cover: Option<String>) -> CreateEm
             author
         });
     if let Some(review) = log.review {
-        embed = embed
-            .description(
-                MessageBuilder::new()
-                    .push(review.review_text)
-                    .push("\n")
-                    .push("[Ver review en Backloggd](https://www.backloggd.com".to_owned() + &*review.review_url + ")")
-                    .build(),
-            );
+        embed = embed.description(
+            MessageBuilder::new()
+                .push(">>> ")
+                .push(review.review_text)
+                .push("\n")
+                .push(
+                    "[Ver review en Backloggd](https://www.backloggd.com".to_owned()
+                        + &*review.review_url
+                        + ")",
+                )
+                .build(),
+        );
     }
     if let Some(cover) = cover {
         embed = embed.thumbnail(
@@ -127,7 +141,9 @@ async fn refresh_twitch_token() {
                 .unwrap_or_else(|_| Utc::now().naive_utc().date())
         },
     );
-    if (Utc::now().naive_utc().date() - token_generation_date).num_days() < 30 ||  token_generation_date > Utc::now().naive_utc().date() {
+    if (Utc::now().naive_utc().date() - token_generation_date).num_days() < 30
+        || token_generation_date > Utc::now().naive_utc().date()
+    {
         return;
     }
     let client = reqwest::Client::new();
@@ -148,25 +164,50 @@ async fn refresh_twitch_token() {
         .unwrap();
     let response = serde_json::from_str::<serde_json::Value>(&response).unwrap();
     let access_token = response.get("access_token").unwrap().as_str().unwrap();
-    let file_content = fs::read_to_string(".env").unwrap();
-    let mut lines: Vec<String> = file_content.lines().map(String::from).collect();
+    env::set_var("TWITCH_ACCESS_TOKEN", access_token);
+    env::set_var(
+        "TWITCH_TOKEN_GENERATION_DATE",
+        Utc::now().naive_utc().date().to_string(),
+    );
+    update_env_file("TWITCH_ACCESS_TOKEN", access_token).unwrap();
+    update_env_file(
+        "TWITCH_TOKEN_GENERATION_DATE",
+        Utc::now().naive_utc().date().to_string().as_str(),
+    )
+    .unwrap();
+}
 
-    for line in &mut lines {
-        if line.starts_with("TWITCH_ACCESS_TOKEN=") {
-            *line = format!("TWITCH_ACCESS_TOKEN={}", access_token);
-        } else if line.starts_with("TWITCH_TOKEN_GENERATION_DATE=") {
-            *line = format!(
-                "TWITCH_TOKEN_GENERATION_DATE={}",
-                Utc::now().naive_utc().date()
-            );
+fn update_env_file(key: &str, new_value: &str) -> std::io::Result<()> {
+    let file_path = ".env";
+    let temp_file_path = ".env.temp";
+
+    // Open the existing .env file and a new temporary file
+    let file = OpenOptions::new().read(true).open(file_path)?;
+    let mut temp_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(temp_file_path)?;
+
+    let reader = BufReader::new(file);
+
+    // Iterate over the lines in the .env file
+    for line in reader.lines() {
+        let line = line?;
+        let mut new_line = line.clone();
+
+        // If the line contains the key, replace it with the new value
+        if line.starts_with(key) {
+            new_line = format!("{}={}", key, new_value);
         }
+
+        // Write the line to the temporary file
+        writeln!(temp_file, "{}", new_line)?;
     }
 
-    let file = fs::File::create(".env").unwrap();
-    let mut writer = BufWriter::new(file);
-    for line in &lines {
-        writeln!(writer, "{}", line).unwrap();
-    }
+    // Rename the temporary file to .env, replacing the old .env file
+    std::fs::rename(temp_file_path, file_path)?;
+
+    Ok(())
 }
 
 async fn get_cover(game_name: &str) -> Option<String> {
@@ -300,9 +341,8 @@ async fn get_logs() -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        let review_text= get_review_text(&log_element_html);
-        if has_not_passed_more_than_half_an_hour(&timestamp)
-        {
+        let review_text = get_review_text(&log_element_html);
+        if has_not_passed_more_than_half_an_hour(&timestamp) {
             logs.push(get_log(
                 username.clone(),
                 decode_html_entities_to_string(game_name, &mut "".to_string()).to_string(),
@@ -310,7 +350,7 @@ async fn get_logs() -> Vec<Log> {
                 status_log,
                 game_url,
                 timestamp,
-                review_text
+                review_text,
             ));
         }
     }
@@ -336,12 +376,25 @@ fn get_review_text(log_element_html: &Html) -> Option<Review> {
     let review_url_selector = scraper::Selector::parse("a.small-link").unwrap();
     let review_link = review_card.unwrap().select(&review_url_selector).next();
     if review_body.is_some() {
-        let review_text = review_body.unwrap().inner_html().to_string().replace("<br>", "\n");
+        let review_text = review_body
+            .unwrap()
+            .inner_html()
+            .to_string()
+            .replace("<br>", "\n");
         let limit = 500;
         if review_text.len() < limit {
             return Some(Review {
-                review_url: review_link.unwrap().value().attr("href").unwrap().to_string(),
-                review_text: if is_spoiler { format!("||{}||", review_text) } else { review_text },
+                review_url: review_link
+                    .unwrap()
+                    .value()
+                    .attr("href")
+                    .unwrap()
+                    .to_string(),
+                review_text: if is_spoiler {
+                    format!("||{}||", review_text)
+                } else {
+                    review_text
+                },
             });
         }
         let mut limited_text = String::new();
@@ -357,8 +410,13 @@ fn get_review_text(log_element_html: &Html) -> Option<Review> {
             limited_text.push_str("...");
         }
         return Some(Review {
-            review_url: review_link.unwrap().value().attr("href").unwrap().to_string(),
-            review_text : limited_text,
+            review_url: review_link
+                .unwrap()
+                .value()
+                .attr("href")
+                .unwrap()
+                .to_string(),
+            review_text: limited_text,
         });
     }
     None
