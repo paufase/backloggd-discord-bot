@@ -164,11 +164,6 @@ async fn refresh_twitch_token() {
         .unwrap();
     let response = serde_json::from_str::<serde_json::Value>(&response).unwrap();
     let access_token = response.get("access_token").unwrap().as_str().unwrap();
-    env::set_var("TWITCH_ACCESS_TOKEN", access_token);
-    env::set_var(
-        "TWITCH_TOKEN_GENERATION_DATE",
-        Utc::now().naive_utc().date().to_string(),
-    );
     update_env_file("TWITCH_ACCESS_TOKEN", access_token).unwrap();
     update_env_file(
         "TWITCH_TOKEN_GENERATION_DATE",
