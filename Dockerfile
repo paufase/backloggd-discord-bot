@@ -1,3 +1,3 @@
-FROM gcr.io/distroless/cc-debian12:latest-arm64
+FROM arm64v8/debian:latest
 COPY target/aarch64-unknown-linux-gnu/release/backloggd-discord-bot /
 ENTRYPOINT [ /backloggd-discord-bot ]
