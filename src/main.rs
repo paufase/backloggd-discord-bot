@@ -1,3 +1,10 @@
+use std::collections::hash_map::DefaultHasher;
+use std::env;
+use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufReader, Write};
+use std::time::Duration;
+
 use chrono::NaiveDate;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use dotenv::dotenv;
@@ -13,12 +20,6 @@ use serenity::model::gateway::Ready;
 use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
-use std::collections::hash_map::DefaultHasher;
-use std::env;
-use std::fs::OpenOptions;
-use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Write};
-use std::time::Duration;
 
 struct Handler;
 
@@ -286,38 +287,6 @@ async fn get_logs() -> Vec<Log> {
         .collect::<Vec<String>>();
     for log_element in logs_elements {
         let log_element_html = string_to_html(&log_element);
-        let game_selector = scraper::Selector::parse("div.col.pl-1>a").unwrap();
-        let a_element = log_element_html.select(&game_selector).nth(1).unwrap();
-        let game_url = a_element.value().attr("href").unwrap().trim().to_string();
-        let game_name = log_element_html
-            .select(&game_selector)
-            .nth(1)
-            .unwrap()
-            .inner_html()
-            .trim()
-            .to_string();
-        let username = log_element_html
-            .select(&game_selector)
-            .next()
-            .unwrap()
-            .inner_html()
-            .trim()
-            .to_string();
-        let status_log = get_status_log(&log_element);
-        let stars_selector = scraper::Selector::parse(
-            "div.col.pl-1>div.stars-inline.star-ratings-static>div.stars-top",
-        )
-        .unwrap();
-        let mut stars = 0.0;
-        let element = log_element_html.select(&stars_selector).next();
-        if element.is_some() {
-            let style_text = element.unwrap().value().attr("style").unwrap_or("");
-            let numeric_chars = style_text
-                .chars()
-                .filter(|c| c.is_numeric())
-                .collect::<String>();
-            stars = numeric_chars.parse::<f64>().unwrap_or(0.0) * 5.0 / 100.0;
-        }
         let timestamp_selector =
             scraper::Selector::parse("div.col-auto>p.mb-0.time-tooltip").unwrap();
         let timestamp = string_to_html(
@@ -336,8 +305,40 @@ async fn get_logs() -> Vec<Log> {
         .attr("datetime")
         .unwrap()
         .to_string();
-        let review_text = get_review_text(&log_element_html);
         if has_not_passed_more_than_half_an_hour(&timestamp) {
+            let game_selector = scraper::Selector::parse("div.col.pl-1>a").unwrap();
+            let a_element = log_element_html.select(&game_selector).nth(1).unwrap();
+            let game_url = a_element.value().attr("href").unwrap().trim().to_string();
+            let game_name = log_element_html
+                .select(&game_selector)
+                .nth(1)
+                .unwrap()
+                .inner_html()
+                .trim()
+                .to_string();
+            let username = log_element_html
+                .select(&game_selector)
+                .next()
+                .unwrap()
+                .inner_html()
+                .trim()
+                .to_string();
+            let status_log = get_status_log(&log_element);
+            let stars_selector = scraper::Selector::parse(
+                "div.col.pl-1>div.stars-inline.star-ratings-static>div.stars-top",
+            )
+            .unwrap();
+            let mut stars = 0.0;
+            let element = log_element_html.select(&stars_selector).next();
+            if element.is_some() {
+                let style_text = element.unwrap().value().attr("style").unwrap_or("");
+                let numeric_chars = style_text
+                    .chars()
+                    .filter(|c| c.is_numeric())
+                    .collect::<String>();
+                stars = numeric_chars.parse::<f64>().unwrap_or(0.0) * 5.0 / 100.0;
+            }
+            let review_text = get_review_text(&log_element_html);
             logs.push(get_log(
                 username.clone(),
                 decode_html_entities_to_string(game_name, &mut "".to_string()).to_string(),
@@ -368,7 +369,7 @@ fn get_review_text(log_element_html: &Html) -> Option<Review> {
     let is_spoiler = is_spoiler.is_some();
     let review_body_selector = scraper::Selector::parse("div.card-text").unwrap();
     let review_body = review_card.unwrap().select(&review_body_selector).next();
-    let review_url_selector = scraper::Selector::parse("a.small-link").unwrap();
+    let review_url_selector = scraper::Selector::parse("a.open-review-link").unwrap();
     let review_link = review_card.unwrap().select(&review_url_selector).next();
     if review_body.is_some() {
         let review_text = review_body
@@ -438,7 +439,11 @@ async fn get_avatar_url(username: &str) -> String {
 fn has_not_passed_more_than_half_an_hour(timestamp: &str) -> bool {
     let timestamp = get_timestamp(timestamp);
     let now = Utc::now().timestamp();
-    now - timestamp < 1800
+    let time_to_check = env::var("SECONDS_UNTIL_NEXT_CHECK")
+        .expect("Environment variable SECONDS_UNTIL_NEXT_CHECK is missing")
+        .parse::<i64>()
+        .expect("SECONDS_UNTIL_NEXT_CHECK is not a number");
+    now - timestamp < time_to_check
 }
 
 fn get_timestamp(timestamp_str: &str) -> i64 {
