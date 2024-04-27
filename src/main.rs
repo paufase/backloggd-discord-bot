@@ -271,14 +271,18 @@ struct Cover {
 
 async fn get_logs() -> Vec<Log> {
     let mut logs = Vec::new();
-    let response = reqwest::get(
-        "https://www.backloggd.com/u/spanishtoboggan/activity/friends/played,finished/",
-    )
-    .await
-    .unwrap()
-    .text()
-    .await
-    .unwrap();
+    let client = reqwest::Client::builder()
+        .user_agent(env::var("USER_AGENT").expect("NO USER AGENT"))
+        .build();
+    let response = client
+        .expect("REASON")
+        .get("https://www.backloggd.com/u/spanishtoboggan/activity/friends/played,finished/")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     let document = Html::parse_document(&response);
     let log_selector = scraper::Selector::parse("div.row.activity").unwrap();
     let logs_elements = document
@@ -419,7 +423,13 @@ fn get_review_text(log_element_html: &Html) -> Option<Review> {
 }
 
 async fn get_avatar_url(username: &str) -> String {
-    let response = reqwest::get("https://www.backloggd.com/u/".to_string() + username)
+    let client = reqwest::Client::builder()
+        .user_agent(env::var("USER_AGENT").expect("NO USER AGENT"))
+        .build();
+    let response = client
+        .expect("REASON")
+        .get("https://www.backloggd.com/u/".to_string() + username)
+        .send()
         .await
         .unwrap()
         .text()
